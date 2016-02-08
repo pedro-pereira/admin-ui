@@ -148,7 +148,7 @@ module AdminUI
 
       if @doppler_websocket.nil?
         @logger.error('Doppler failure attempting websocket connection to firehose')
-        doppler_future_connect(false)
+        doppler_future_connect(false, false)
       else
         @doppler_websocket.on :open do |event|
           doppler_open(event)
@@ -192,15 +192,19 @@ module AdminUI
       @rollup_interval_timer = nil
     end
 
-    def doppler_future_connect(force_login)
+    def doppler_future_connect(immediate_connection, force_login)
       cancel_connect_timer
 
       return unless @running
 
-      if force_login
-        @logger.debug('Doppler will attempt reconnect on next tick with forced login')
+      if immediate_connection
+        if force_login
+          @logger.debug('Doppler will attempt reconnect on next tick with forced login')
+        else
+          @logger.debug('Doppler will attempt reconnect on next tick without forced login')
+        end
         EventMachine.next_tick do
-          eventmachine_setup(true)
+          eventmachine_setup(force_login)
         end
       else
         @logger.debug("Doppler will attempt reconnect in #{@config.doppler_reconnect_delay} seconds without forced login")
@@ -290,8 +294,9 @@ module AdminUI
       @logger.debug("Doppler close: #{event.inspect}")
 
       if @running
-        force_login = !force_login && (@doppler_websocket.status == 401)
-        doppler_future_connect(force_login)
+        force_login          = !force_login && (@doppler_websocket.status == 401)
+        immediate_connection = force_login || (event.code == 1008)
+        doppler_future_connect(immediate_connection, force_login)
       end
       @doppler_websocket = nil
     end
