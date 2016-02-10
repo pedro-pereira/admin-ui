@@ -1,8 +1,7 @@
 require 'logger'
 require 'openssl'
+require 'thin'
 require 'thread'
-require 'webrick/httprequest'
-require 'webrick/https'
 require_relative 'admin/config'
 require_relative 'admin/cc'
 require_relative 'admin/cc_rest_client'
@@ -64,8 +63,6 @@ module AdminUI
       @doppler.join
       @cc.join
       @event_machine_loop.join
-
-      Rack::Handler::WEBrick.shutdown
     end
 
     private
@@ -141,40 +138,29 @@ module AdminUI
     end
 
     def launch_web
-      if defined?(WEBrick::HTTPRequest)
-        # TODO: Look at moving to Thin to avoid this limitation
-        # We have to increase the WEBrick HTTPRequest constant MAX_URI_LENGTH from its defined value of 2083
-        # or we will have problems with the jQuery DataTables server side ajax calls causing WEBrick::HTTPStatus::RequestURITooLarge
-        WEBrick::HTTPRequest.instance_eval { remove_const :MAX_URI_LENGTH }
-        WEBrick::HTTPRequest.const_set('MAX_URI_LENGTH', 10_240)
-      end
-
       # Only show error and fatal messages
-      error_logger = Logger.new(STDERR)
-      error_logger.level = Logger::ERROR
+      Thin::Logging.level = Logger::ERROR
 
       web_hash =
         {
-          AccessLog:          [],
-          BindAddress:        @config.bind_address,
-          Host:               @config.bind_address, # Newer Rack::Handler::WEBrick requires Host
-          DoNotReverseLookup: true,
-          Logger:             error_logger,
-          Port:               @config.port
+          Host:    @config.bind_address,
+          Port:    @config.port,
+          signals: false
         }
 
       web_hash[:StartCallback] = @start_callback if @start_callback
 
+      ssl         = false
+      ssl_options = {}
+
       if @config.secured_client_connection
+        ssl   = true
         pkey  = OpenSSL::PKey::RSA.new(File.open(@config.ssl_private_key_file_path).read, @config.ssl_private_key_pass_phrase)
         cert  = OpenSSL::X509::Certificate.new(File.open(@config.ssl_certificate_file_path).read)
-        names = OpenSSL::X509::Name.parse cert.subject.to_s
 
-        web_hash[:SSLCertificate]  = cert
-        web_hash[:SSLCertName]     = names
-        web_hash[:SSLEnable]       = true
-        web_hash[:SSLPrivateKey]   = pkey
-        web_hash[:SSLVerifyClient] = OpenSSL::SSL::VERIFY_NONE
+        ssl_options[:cert_chain_file]  = cert
+        ssl_options[:private_key_file] = pkey
+        ssl_options[:verify_peer]      = false
 
         web_class = AdminUI::SecureWeb
       else
@@ -193,7 +179,16 @@ module AdminUI
                           @varz,
                           @view_models)
 
-      Rack::Handler::WEBrick.run(web, web_hash)
+      Rack::Handler::Thin.run(web, web_hash) do |server|
+        server.ssl         = ssl
+        server.ssl_options = ssl_options
+      end
+
+      @start_callback.call if @start_callback
+
+      sleep_amount = @testing ? 0.1 : 1
+      sleep(sleep_amount) while @running
+      puts "after sleeps"
     end
   end
 end
