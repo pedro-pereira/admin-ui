@@ -2,5 +2,6 @@
 applications:
 - name: admin-ui
   memory: 1024
+  disk_quota: 8192
   host: admin-ui
   buildpack: https://github.com/cloudfoundry/ruby-buildpack.git
