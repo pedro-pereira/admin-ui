@@ -1,0 +1,6 @@
+---
+applications:
+- name: admin-ui
+  memory: 1024
+  host: admin-ui
+  buildpack: https://github.com/cloudfoundry/ruby-buildpack.git
